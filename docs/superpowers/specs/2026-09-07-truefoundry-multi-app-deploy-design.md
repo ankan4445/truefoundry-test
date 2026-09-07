@@ -49,13 +49,13 @@ Consequences of that confirmed schema:
 - **`ref` is a pinned commit SHA**, not a branch — `GitSource.ref` is
   required. The committed template carries a placeholder; update it to the
   commit you want deployed (`git rev-parse HEAD`) before each `tfy deploy`.
-- **Path-prefix routing strips back to `/` by default.** `Port.path` (e.g.
-  `/coffee-shop/`) is rewritten to `Port.rewrite_path_to`, which **defaults
-  to `/`** per the SDK's own field docs. So even though multiple apps share
-  one host with different path prefixes, each container itself receives
-  plain `/` requests — the earlier "serve at the root of its own URL"
-  base-path decision below is still correct; the shared host/path-prefix
-  routing is handled entirely by TrueFoundry's ingress, not by the app.
+- **Path-prefix routing strips back to `/` for the upstream request only —
+  not for the browser.** `Port.path` (e.g. `/coffee-shop/`) is rewritten to
+  `Port.rewrite_path_to`, which defaults to `/`, but that only changes what
+  path the *container* sees when the ingress forwards the request; it does
+  not change what URL the *browser* must use to reach the service at all.
+  This was misread on first pass (see below) and corrected after a live
+  deploy 404'd every asset.
 
 ## Git source
 
@@ -72,28 +72,42 @@ something must bind `$PORT`. For a static Vite/React app this means:
 - Add `serve` (npm, `^14.2.6`) as a normal `dependency` (not `devDependency`
   — buildpacks may prune dev deps before the run image, and `serve` must
   survive into it).
-- Add a `start` script: `serve -s dist -l ${PORT:-3000}`.
+- Add a `start` script: `serve -s dist -l ${PORT:-8080}`.
 - Do not use `vite preview` as the start command — `vite` is a
   `devDependency` and isn't guaranteed to survive into the run image.
 
 Every new app folder that's a static SPA follows this same recipe.
 
-## Base-path conflict with the existing Pathfinder target
+## Base path — two nested-path targets, not one root + one nested
 
 `coffee-shop-react-with-agents.md/AGENTS.md` and its `vite.config.ts` bake
 production asset paths under `/app/coffee-shop/` for a separate, existing
 deployment target ("Pathfinder", a zip-upload system that serves apps
-nested under `/app/<name>/`). TrueFoundry serves each Service at the root of
-its own URL, so reusing that same base would 404 every asset.
+nested under `/app/<name>/`). The original plan here was "TrueFoundry serves
+each Service at the root of its own URL," so the fix was going to be a
+`DEPLOY_TARGET=truefoundry` branch forcing `base: '/'`.
 
-Fix: `vite.config.ts` gets one additional conditional branch, keyed off a
-`DEPLOY_TARGET=truefoundry` build-time env var (set in the TrueFoundry
-Service's build settings, not committed anywhere), that forces `base: '/'`
-for the TrueFoundry build only. The existing Pathfinder build path (default,
-no env var set) and every rule in its `AGENTS.md` stay unchanged. Any future
-app folder that only ever targets TrueFoundry does not need this branch at
-all — it's a `dispatch`-per-target inspired mechanism, not a general
-requirement of the layout.
+That plan was wrong, caught by an actual deploy: the real exported YAML
+serves this app under a **shared host with a path prefix**
+(`/coffee-shop/`), not a dedicated root URL — necessary because multiple
+app folders here all deploy into the *same* TrueFoundry workspace, so they
+need distinct path prefixes to avoid colliding on one host. Building with
+`base: '/'` produced a live white screen: `index.html` loaded fine at
+`/coffee-shop/`, but every asset reference was root-absolute
+(`/assets/*.js`), and the ingress has no route for bare `/assets/...` —
+only for `/coffee-shop/*` — so those requests 404'd before ever reaching
+the container. `Port.rewrite_path_to` defaulting to `/` does not fix this;
+it only changes the request the container receives internally, never what
+URL the browser is required to use.
+
+Actual fix: `vite.config.ts` reads a `TFY_BASE_PATH` build-time env var
+(set in `truefoundry.yaml`'s `env`, matching `ports[0].path` exactly —
+`/coffee-shop/` here) and uses it as `base` in production, falling back to
+the Pathfinder default (`/app/coffee-shop/`) when unset. Both targets are
+nested-path targets; they just disagree on the literal prefix and on how
+that prefix's value reaches the build (Pathfinder: hardcoded per-app in
+`AGENTS.md`'s template; TrueFoundry: an env var mirroring `ports[0].path`).
+An app folder that only ever targets TrueFoundry can skip the fallback.
 
 ## Root-level files
 
@@ -101,8 +115,8 @@ requirement of the layout.
   requirements checklist above, git push setup, and the dashboard steps to
   register an app folder as a Service (create Service → connect repo →
   Build using Buildpack → set Root/Build Context Path to the folder → set
-  build env vars if the app needs the `DEPLOY_TARGET` override → set Port →
-  deploy). Also documents how to add a new app folder.
+  `TFY_BASE_PATH` to match the port's path prefix → set Port → deploy).
+  Also documents how to add a new app folder.
 - `.gitignore` — wildcarded per-folder patterns (`**/node_modules`,
   `**/dist`, `**/app.zip`, `*.local`) since multiple app folders will exist
   side by side.

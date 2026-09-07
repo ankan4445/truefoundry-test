@@ -29,9 +29,14 @@ image:
       - -c
       - npm install && npm run build && npm run start
 env:
-  # Selects the TrueFoundry-specific vite `base: '/'` branch in
-  # vite.config.ts, instead of the Pathfinder default `/app/coffee-shop/`.
-  DEPLOY_TARGET: truefoundry
+  # Must exactly match ports[0].path below — vite.config.ts uses this as
+  # the production `base`, so asset URLs baked into index.html match what
+  # the browser actually requests. The ingress's default rewrite_path_to
+  # ("/") only changes the request the *container* sees internally; it does
+  # NOT change what path the browser must use to reach this service at all,
+  # so `base` still has to carry the real external prefix. (Confirmed by a
+  # live deploy 404-ing on /assets/... when base was left as "/".)
+  TFY_BASE_PATH: /coffee-shop/
   PORT: "8080"
 ports:
   - app_protocol: http
@@ -40,9 +45,6 @@ ports:
     path: /coffee-shop/
     port: 8080
     protocol: TCP
-    # rewrite_path_to intentionally omitted — it defaults to "/", which is
-    # what makes it safe for this container to serve everything at "/"
-    # even though it's reached externally under the /coffee-shop/ prefix.
 replicas: 1
 resources:
   cpu_limit: 0.5
