@@ -10,7 +10,7 @@ image:
     # Pinned commit to deploy — required by TrueFoundry (GitSource.ref).
     # Update before every `tfy deploy`: run `git rev-parse HEAD` on the
     # commit you want live and paste it in here.
-    ref: <commit-sha-to-deploy>
+    ref: d72a5f57e1c6ead81611feab6874d84b6e48ed50
   build_spec:
     type: tfy-python-buildpack
     # Only this subfolder of the repo is sent as the build context — this
