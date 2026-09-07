@@ -1,0 +1,57 @@
+type: service
+name: coffee-shop
+allow_interception: false
+image:
+  type: build
+  build_source:
+    type: git
+    repo_url: https://github.com/ankan4445/truefoundry-test.git
+    branch_name: main
+    # Pinned commit to deploy — required by TrueFoundry (GitSource.ref).
+    # Update before every `tfy deploy`: run `git rev-parse HEAD` on the
+    # commit you want live and paste it in here.
+    ref: <commit-sha-to-deploy>
+  build_spec:
+    type: tfy-python-buildpack
+    # Only this subfolder of the repo is sent as the build context — this
+    # is the mechanism that lets multiple app folders share one repo root.
+    build_context_path: ./coffee-shop-react-with-agents.md
+    # tfy-python-buildpack has no Node auto-detection; apt-install a Node
+    # toolchain into the build image so `command` below can run npm.
+    apt_packages:
+      - nodejs
+      - npm
+    # Runs as the container's entrypoint (i.e. at container start, not at
+    # image-build time) — see the design doc's "confirmed schema" section
+    # for why, and the tradeoffs of this Python-buildpack-for-Node hack.
+    command:
+      - sh
+      - -c
+      - npm install && npm run build && npm run start
+env:
+  # Selects the TrueFoundry-specific vite `base: '/'` branch in
+  # vite.config.ts, instead of the Pathfinder default `/app/coffee-shop/`.
+  DEPLOY_TARGET: truefoundry
+  PORT: "8080"
+ports:
+  - app_protocol: http
+    expose: true
+    host: tfy-test-usw2-ee.my.automationanywhere.digital
+    path: /coffee-shop/
+    port: 8080
+    protocol: TCP
+    # rewrite_path_to intentionally omitted — it defaults to "/", which is
+    # what makes it safe for this container to serve everything at "/"
+    # even though it's reached externally under the /coffee-shop/ prefix.
+replicas: 1
+resources:
+  cpu_limit: 0.5
+  cpu_request: 0.2
+  ephemeral_storage_limit: 2000
+  ephemeral_storage_request: 1000
+  memory_limit: 500
+  memory_request: 200
+  node:
+    type: node_selector
+    capacity_type: spot_fallback_on_demand
+workspace_fqn: tfy-aws-test-usw2-ee:community-and-learning-dev-ws

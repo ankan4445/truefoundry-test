@@ -17,19 +17,45 @@ shared root-level build tooling. Each app folder maps to exactly one
 TrueFoundry Service, configured in the dashboard with that folder set as the
 Build Context Path / Root Path.
 
-## Why no committed `truefoundry.yaml`
+## `truefoundry.yaml` — confirmed schema
 
-The installed `tfy` CLI (v0.17.3) and its bundled `truefoundry_sdk`/
-`truefoundry` Python packages were inspected directly
-(`truefoundry_sdk/types/build_build_spec.py`, `docker_file_build.py`,
-`python_build.py`). The only two build-spec types defined there are
-`dockerfile` and `tfy-python-buildpack` (Python-only). No generic
-multi-language Buildpack build type exists in this schema, so a
-`truefoundry.yaml` using an unverified `type` value would be a guess, not a
-fact. The dashboard's "Build using Buildpack" wizard is used as the source
-of truth instead — it demonstrably supports a per-service root/build-context
-path. If a real Buildpack-service YAML is exported from the dashboard later,
-it can be templated precisely and this decision revisited.
+The installed `tfy` CLI (v0.17.3), its bundled `truefoundry_sdk`/
+`truefoundry` Python packages, and TrueFoundry's live API docs all agree:
+there is no generic multi-language Buildpack build-spec type. The only two
+are `dockerfile` and `tfy-python-buildpack` — the latter is what the
+dashboard's "Build using Buildpack" wizard actually exports for this org,
+confirmed by pasting a real exported YAML (see below) rather than guessing.
+
+Consequences of that confirmed schema:
+
+- **It's a Python-flavored builder, not a Node one.** There's no npm/Node
+  auto-detection. `apt_packages: [nodejs, npm]` installs a Node toolchain
+  into the (Debian-based) build image, and `build_spec.command` — set as the
+  container's entrypoint — is what actually runs `npm install && npm run
+  build && npm run start`. This means the Node build happens at **container
+  start**, not at image-build time: every cold start reinstalls
+  node_modules and rebuilds. Acceptable for this dev/test use case; a
+  `dockerfile`-type build (a real multi-stage Docker build) would avoid the
+  repeated build cost if this app needs to scale or restart often later.
+- **Node version risk.** The apt `nodejs`/`npm` packages' version depends on
+  the buildpack's underlying Debian release. Vite 5 needs Node ≥18. This is
+  expected to be fine on current Debian-based Python images (bookworm ships
+  Node 18.x) but isn't independently verified here — check `node --version`
+  in the first deploy's build logs; if it's too old, switch to a
+  `dockerfile` build with an explicit Node base image instead.
+- **`build_context_path`** (relative to the git checkout root) is exactly
+  the per-app-folder mechanism this design's layout convention relies on —
+  confirmed real, not assumed.
+- **`ref` is a pinned commit SHA**, not a branch — `GitSource.ref` is
+  required. The committed template carries a placeholder; update it to the
+  commit you want deployed (`git rev-parse HEAD`) before each `tfy deploy`.
+- **Path-prefix routing strips back to `/` by default.** `Port.path` (e.g.
+  `/coffee-shop/`) is rewritten to `Port.rewrite_path_to`, which **defaults
+  to `/`** per the SDK's own field docs. So even though multiple apps share
+  one host with different path prefixes, each container itself receives
+  plain `/` requests — the earlier "serve at the root of its own URL"
+  base-path decision below is still correct; the shared host/path-prefix
+  routing is handled entirely by TrueFoundry's ingress, not by the app.
 
 ## Git source
 
@@ -83,7 +109,10 @@ requirement of the layout.
 
 ## Out of scope
 
-- No `truefoundry.yaml` (see above).
 - No changes to the Pathfinder zip-upload flow or its `AGENTS.md` rules.
-- No CI/CD pipeline — deploys are triggered manually via the TrueFoundry
-  dashboard per this design; automating that is a separate future project.
+- No CI/CD pipeline, and no automatic `ref` updates — `tfy deploy -f` is run
+  manually per app, and the `ref` placeholder is updated by hand first;
+  automating that is a separate future project.
+- No `dockerfile`-type build for coffee-shop, even though it would avoid the
+  container-start rebuild cost noted above — out of scope unless the
+  apt-Node approach proves unworkable.
